@@ -24,7 +24,7 @@ def create_spark_session():
         .getOrCreate()
     return spark
 
-def process_song_data(spark, input_data, output_path):
+def process_song_data(spark, output_path):
     """
     Process song data and generates two dimension tables, songs and artists. Save the parquet files to S3 Bucket.
     :param spark: The Spark session object.
@@ -46,25 +46,37 @@ def process_song_data(spark, input_data, output_path):
 
     ])
 
-    # read song data file
-    df_song = spark.read.json("s3a://udacity-dend/song_data/A/*/*/*.json",schema=songSchema)
+    # read song data file, create a staging_songs table first
+    staging_songs = spark.read.json("s3a://udacity-dend/song_data/A/*/*/*.json",schema=songSchema)
+    staging_songs.registerTempTable("staging_songs")
 
-    # extract columns to create songs table
-    song_columns = ["title", "artist_id", "year", "duration"]
-
-    # extract columns to create songs table
-    songs_table = df_song.select(song_columns).dropDuplicates().withColumn("song_id", monotonically_increasing_id())
+    # dedup songs data and create songs table
+    songs_table = spark.sql("""SELECT DISTINCT song_id, title, artist_id, year, duration 
+                                FROM 
+                                    (SELECT 
+                                        title, artist_id, year, duration, ROW_NUMBER() OVER(PARTITION BY song_id ORDER BY title desc) AS sequence 
+                                    FROM 
+                                        staging_songs) AS ss
+                                     WHERE sequence =1   
+                            """)
 
     # write songs table to parquet files partitioned by year and artist
     songs_table.write.mode("overwrite").partitionBy("year", "artist_id").parquet(output_path+"songs_table")
 
-    # extract columns to create artists table
-    artists_table = df_song.selectExpr('artist_id', 'artist_name as artist', 'artist_location as location', 'artist_latitude as latitude', 'artist_longitude as longitude')
+    #dedup artists data and create artists table
+    artists_table = spark.sql("""SELECT DISTINCT 
+                                    FROM 
+                                        (SELECT 
+                                            artist_id, artist_name as artist, artist_location as location, artist_latitude as latitude, artist_longitude as longitude,
+                                            ROW_NUMBER() OVER (PARTITION BY artist_id ORDER BY artist_name desc) AS sequence
+                                            FROM staging_songs) AS ss
+                                            WHERE sequence=1
+                            """)
 
     # write artists table to parquet files
     artists_table.write.mode("overwrite").parquet(output_path+"artists_table/")
 
-def process_log_data(spark, input_data, output_path):
+def process_log_data(spark, output_path):
     """
     Process log data to get two dimension tables, users and time, as well as one fact table, songplays.
     Save the output as parquet files to S3.
@@ -74,25 +86,40 @@ def process_log_data(spark, input_data, output_path):
     :return: None
     """
     # read log data file
-    df_log = spark.read.json("s3a://udacity-dend/log_data/*/*/*.json")
+    staging_events= spark.read.json("s3a://udacity-dend/log_data/*/*/*.json")
 
     # filter by actions for song plays
-    df_log = df_log.filter(df_log.page == "NextSong")
+    staging_events = staging_events.filter(staging_events.page == "NextSong")
 
-    # extract columns for users table
-    users_table = df_log.selectExpr('userId as user_id', 'firstName as first_name', 'lastName as last_name', 'gender', 'level')
-    # get unique not null users
-    users_table = users_table.dropDuplicates(subset=['user_id'])
-    users_table = users_table.where(col('userId').isNotNull())
-    # write users table to parquet files
-    users_table.write.mode("overwrite").parquet(output_path+"users_table/")
+    # create songplay_id column for staging_events
+    staging_events = staging_events.withColumn('songplay_id', monotonically_increasing_id())
 
     # create timestamp column from original timestamp column
     get_datetime = udf(lambda x: datetime.fromtimestamp((x / 1000)), types.TimestampType())
-    df_log = df_log.withColumn("timestamp", get_datetime("ts"))
+    staging_events = staging_events.withColumn("timestamp", get_datetime("ts"))
 
-    # extract columns to create time table
-    time_table = df_log.select(
+    # create a TempTable for sql queries
+    staging_events.registerTempTable("staging_events")
+    
+    #dedup users data and create users table
+    users_table = spark.sql("""SELECT DISTINCT user_id, first_name, last_name, gender, level
+                                FROM 
+                                    (SELECT 
+                                            userId as user_id, firstName as first_name, lastName as last_name, gender, level,
+                                            ROW_NUMBER() OVER (PARTITION BY userId ORDER BY last_name) AS sequence
+                                            FROM staging_events) AS se
+                                            WHERE sequence =1 AND userId IS NOT NULL
+                                """)
+
+    # write users table to parquet files
+    users_table.write.mode("overwrite").parquet(output_path+"users_table/")
+
+    # dedup time data and create time table
+    time_table = spark.sql("""SELECT DISTINCT timestamp FROM staging_events WHERE timestamp IS NOT NULL
+                            """)
+
+    # extract columns from timestamp
+    time_table = time_table.select(
                     col('timestamp').alias('start_time'),
                     hour('timestamp').alias('hour'),
                     dayofmonth('timestamp').alias('day'),
@@ -103,23 +130,17 @@ def process_log_data(spark, input_data, output_path):
     # write time table to parquet files partitioned by year and month
     time_table.write.mode("overwrite").partitionBy("year", "month").parquet(output_path + "time_table/")
 
-    # read in song data to use for songplays table
+    # read in song data to use for songplays table and create table
     song_df = spark.read.parquet(output_path + 'songs_table/')
-
-    # read in artist data
-    artist_df = spark.read.parquet(output_path + "artists_table/")
-
-    #create songplay_id column for df_log
-    df_log = df_log.withColumn('songplay_id', monotonically_increasing_id())
-
-    #create Tempview tables for running sql queries in Hive
-    df_log.createTempView("staging_events")
     song_df.createTempView("songs")
+
+    # read in artist data and create table
+    artist_df = spark.read.parquet(output_path + "artists_table/")
     artist_df.createTempView("artists")
 
     # extract columns from joined song and log datasets to create songplays table; include year and month to allow parquet partitioning
     songplays_table = spark.sql("""
-        SELECT
+        SELECT DISTINCT
             se.songplay_id,
             se.start_time,
             se.userId as user_id,
@@ -129,8 +150,8 @@ def process_log_data(spark, input_data, output_path):
             se.sessionId as session_id,
             se.location,
             se.userAgent as user_agent,
-            year(l.start_time) as year,
-            month(l.start_time) as month
+            year(se.start_time) as year,
+            month(se.start_time) as month
         FROM staging_events se
         LEFT JOIN (songs s
             INNER JOIN artists ON song_df.artist_id = artists.artist_id) AS tmp
@@ -146,10 +167,9 @@ def process_log_data(spark, input_data, output_path):
 
 def main():
     spark = create_spark_session()
-    input_data = "s3a://udacity-dend/"
     output_path = "s3://s3-bucket-kzzz777/"
 
-    process_song_data(spark, input_data, output_path)
-    process_log_data(spark, input_data, output_path)
+    process_song_data(spark, output_path)
+    process_log_data(spark, output_path)
 
 
