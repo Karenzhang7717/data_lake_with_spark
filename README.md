@@ -3,7 +3,7 @@ Using Spark to build an ETL pipeline for a data lake hosted on S3.
 
 # Introduction
 A music streaming startup, Sparkify, has grown their user base and song database even more and want to move their data warehouse to a data lake. Their data resides in S3, in a directory of JSON logs on user activity on the app, as well as a directory with JSON metadata on the songs in their app.
-![[image](https://github.com/Karenzhang7717/data_lake_with_spark/blob/main/diagram.png)
+![image](https://github.com/Karenzhang7717/data_lake_with_spark/blob/main/diagram.png)
 # Purpose of the project
 The purpose of this project is to build ETL pipeline that extracts the data from S3, processes and transforms them using Spark, and loads the data back into S3 as a set of fact and dimensional tables. This will allow Sparkify's analytics team to study insights in what songs their users are listening to.
 
