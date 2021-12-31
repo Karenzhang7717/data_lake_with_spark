@@ -8,6 +8,7 @@ A music streaming startup, Sparkify, has grown their user base and song database
 The purpose of this project is to build ETL pipeline that extracts the data from S3, processes and transforms them using Spark, and loads the data back into S3 as a set of fact and dimensional tables. This will allow Sparkify's analytics team to study insights in what songs their users are listening to.
 
 # Database schema design
+![image](https://github.com/Karenzhang7717/data_lake_with_spark/blob/main/star_schema.png)
 Using the song and log datasets, I created a star schema optimized for queries on song play analysis. This includes the following tables:
 ## Fact Table
 songplays - records in log data associated with song plays i.e. records with page NextSong
@@ -31,7 +32,7 @@ Song Dataset
 The first dataset is a subset of real data from the Million Song Dataset. Each file is in JSON format and contains metadata about a song and the artist of that song. The files are partitioned by the first three letters of each song's track ID. For example, here are filepaths to two files in this dataset.
 
 song_data/A/B/C/TRABCEI128F424C983.json \
-song_data/A/A/B/TRAABJL12903CDCF1A.json
+song_data/A/A/B/TRAABJL12903CDCF1A.json \
 And below is an example of what a single song file, TRAABJL12903CDCF1A.json, looks like.
 
 {"num_songs": 1, "artist_id": "ARJIE2Y1187B994AB7", "artist_latitude": null, "artist_longitude": null, "artist_location": "", "artist_name": "Line Renaud", "song_id": "SOUPIRU12A6D4FA1E1", "title": "Der Kleine Dompfaff", "duration": 152.92036, "year": 0}
